@@ -202,7 +202,7 @@ def process_data(glow, virtual_entities, period, dt_from, dt_to, pub, mqtt_topic
             if no_incomplete_periods:
                 readings.pop()
 
-           
+
             publish_readings(res, readings, period, pub, mqtt_topic, metrics_fp)
 
 

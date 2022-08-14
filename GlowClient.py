@@ -200,6 +200,13 @@ class GlowClient:
 
         resp = self.session.post(url, headers=headers, data=json.dumps(data))
 
+
+        # responses:
+        #   200: OK
+        #   400: Bad Request
+        #   401: Unauthorised
+        #   500: Internal Server Error
+
         if resp.status_code != 200:
             raise RuntimeError("Authentication failed")
 
@@ -229,6 +236,10 @@ class GlowClient:
 
         resp = self.session.get(url, headers=headers, timeout=10)
 
+        # responses:
+        #   200: OK
+        #   500: Internal Server Error
+
         if resp.status_code != 200:
             raise RuntimeError("Request failed")
 
@@ -249,6 +260,11 @@ class GlowClient:
         url = self.url + "virtualentity/" + virtual_entity.id + "/resources"
 
         resp = self.session.get(url, headers=headers, timeout=10)
+
+        # responses:
+        #   200: OK
+        #   404: not found
+        #   500: Internal Server Error
 
         if resp.status_code != 200:
             raise RuntimeError("Request failed")
@@ -280,6 +296,11 @@ class GlowClient:
         url = self.url + "resource/" + resource.id + "/readings"
 
         resp = self.session.get(url, headers=headers, params=params, timeout=10)
+
+        # responses:
+        #   200: OK
+        #   401: Unauthorised
+        #   500: Internal Server Error
 
         if resp.status_code != 200:
             raise RuntimeError("Request failed")

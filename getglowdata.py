@@ -159,7 +159,7 @@ def publish_readings(resource, readings, period, mqtt_client, mqtt_topic, metric
             f'{datetime.fromtimestamp(r[0], pytz.UTC).isoformat()}, '
             f'{str(r[1])}, {units}'
         )
-
+        logging.info('published: %s', msg)
         metrics_fp.write(msg + '\n')
 
     metrics_fp.flush()

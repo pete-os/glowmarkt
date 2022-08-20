@@ -1,30 +1,50 @@
 #!/usr/bin/env python3
 """
-add docstring for getflowdata
-"""
+Programme 'getglowdata'.
 
+Downloads energy usage and cost data from the API, publishes to mqtt and writes to file.
+
+The programme will download any historic data from the start date defined,
+and will then continuously poll for new data according to the defined interval
+
+Functions:
+    setup_logging
+    publish_readings
+    process_data
+    do_process_loop
+    main
+"""
+import io
 import sys
 import logging
+from typing import NoReturn, IO
+import json
+
 from time import sleep
 from datetime import datetime
 
 import pytz
-import json
 
 import paho.mqtt.client as mqtt
 
 from glow import GlowConfig, GlowClient, Checkpoint
+from glow import ConfigError, GlowAPIError, CheckpointError, InvalidPeriod
 from glow import round_down, max_end_dt
 
-def setup_logging(log_name, log_level):
-    """
+MQTT_CLIENT_CONNECTED = False
 
-    :param log_name:
-    :type log_name:
-    :param log_level:
-    :type log_level:
-    :return:
-    :rtype:
+
+class MqttError(Exception):
+    """MQTT exceptions."""
+
+
+def setup_logging(log_name: str, log_level: str) -> None:
+    """
+    Configure the logging system.
+
+    :param log_name: name of the log file to use
+    :param log_level: log level to use
+    :return: None
     """
     logging.basicConfig(
         filename=log_name,
@@ -35,22 +55,17 @@ def setup_logging(log_name, log_level):
 
 def publish_readings(resource, readings, period, mqtt_client, mqtt_topic, metrics_fp):
     """
+    Publish the list of readings to mqtt and the output fil metrics_fp.
 
-    :param resource:
-    :type resource:
-    :param readings:
-    :type readings:
-    :param period:
-    :type period:
-    :param mqtt_client:
-    :type mqtt_client:
-    :param mqtt_topic:
-    :type mqtt_topic:
-    :param metrics_fp:
-    :type metrics_fp:
-    :return:
-    :rtype:
+    :param resource: the relevant glow resource
+    :param readings: the list of readings
+    :param period: aggregation period for the readings
+    :param mqtt_client: mqtt publish connection
+    :param mqtt_topic: topic to publish on
+    :param metrics_fp: output file for the readings
+
     """
+    # pylint: disable=too-many-arguments
     if resource.base_unit == "pence":
         multiplier = 0.01
         units = "GBP"
@@ -58,30 +73,35 @@ def publish_readings(resource, readings, period, mqtt_client, mqtt_topic, metric
         multiplier = 1
         units = resource.base_unit
 
-
     topic = mqtt_topic + '/' + resource.res_type()
 
-    for r in readings:
+    for reading in readings:
 
-        if r[1] is not None:
-            r[1] = round(r[1] * multiplier, 5)
+        if reading[1] is not None:
+            reading[1] = round(reading[1] * multiplier, 5)
 
             if mqtt_client is not None:
                 payload = json.dumps({'metric_fname': resource.res_type(),
                                       'supply_type': resource.supply_type(),
                                       'metric_type': 'consumption',
                                       'period': period,
-                                      'timestamp': r[0],
+                                      'timestamp': reading[0],
                                       'timestamp_str':
-                                          datetime.fromtimestamp(r[0], pytz.UTC).isoformat(),
-                                      'metric_value': r[1],
+                                          datetime.fromtimestamp(reading[0], pytz.UTC).isoformat(),
+                                      'metric_value': reading[1],
                                       'units': units})
 
-                message = mqtt_client.publish(topic, payload)
-                message.wait_for_publish()
+                try:
+                    message = mqtt_client.publish(topic, payload)
+                    message.wait_for_publish()
+
+                except ValueError as err:
+                    # failed to queue message
+                    raise MqttError('MQTT publish failed') from err
+
         else:
-            msg = f'value at timestamp {str(r[0])} ' \
-                  f'[{datetime.fromtimestamp(r[0], pytz.UTC).isoformat()}] ' \
+            msg = f'value at timestamp {str(reading[0])} ' \
+                  f'[{datetime.fromtimestamp(reading[0], pytz.UTC).isoformat()}] ' \
                   f'for classifier {resource.classifier} with period {period} is Null - dropped'
 
             logging.info(msg)
@@ -89,97 +109,76 @@ def publish_readings(resource, readings, period, mqtt_client, mqtt_topic, metric
         # log data for one of the classifiers for info
         msg = (
             f'{period}, {resource.res_type()}, {resource.supply_type()},'
-            f'{r[0]}, {datetime.fromtimestamp(r[0], pytz.UTC).isoformat()}, '
-            f'{str(r[1])}, {units}'
+            f'{reading[0]}, {datetime.fromtimestamp(reading[0], pytz.UTC).isoformat()}, '
+            f'{str(reading[1])}, {units}'
         )
 
-        logging.info('published: %s', msg)
+        logging.debug('published: %s', msg)
         metrics_fp.write(msg + '\n')
 
     metrics_fp.flush()
 
 
-def process_data(glow, virtual_entities, period, dt_from, dt_to, pub, mqtt_topic,
-                 no_incomplete_periods, metrics_fp):
+def process_data(glow: GlowClient, virtual_entities: list, conf: GlowConfig, dt_from: datetime,
+                 dt_to: datetime, pub: mqtt.Client, metrics_fp: IO) -> None:
     """
+    Retrieve the glow resources (and readings for each resource) in the list of virtual entities.
 
-    :param glow:
-    :type glow:
-    :param virtual_entities:
-    :type virtual_entities:
-    :param period:
-    :type period:
-    :param dt_from:
-    :type dt_from:
-    :param dt_to:
-    :type dt_to:
-    :param pub:
-    :type pub:
-    :param mqtt_topic:
-    :type mqtt_topic:
-    :param no_incomplete_periods:
-    :type no_incomplete_periods:
-    :param metrics_fp:
-    :type metrics_fp:
-    :return:
-    :rtype:
+    :param glow: the Glow object
+    :param virtual_entities: list of virtual entities that this connection is has permission to read
+    :param conf: the glow configuration
+    :param dt_from: start of time period for which data is being retrieved
+    :param dt_to: end of time period for which data is being retrieved
+    :param pub: mqtt publish connection
+    :param metrics_fp: metrics output file
     """
+    # pylint: disable=too-many-arguments
 
-    for ve in virtual_entities:
+    for this_ve in virtual_entities:
 
         logging.info('Requesting data for %s to %s ...', dt_from, dt_to)
 
-        # The glow response will always include a partial reading for the last datapoint:
-        #   - if dt_to is not on "period" boundary (this is expected)
-        #   - if dt_to is on a 'period' boundary (in which case the partial reading starts at dt_to)
-        #
-        #  Thus, to avoid partial readings, we should drop the last reading in all cases
+        # Glow query will fail if  dt_from = dt_to. This should not happen with a
+        # wait period >= 1 Min, and rounding down dt_from and dt_to to the minute
 
-        if not glow.token_check_valid():
-            glow.authenticate()
+        if dt_from == dt_to:
+            logging.error("process data: dt_from == dt_to [%s [%s]", dt_from, dt_to)
+            raise InvalidPeriod("Error in process_data: dt_from == dt_to")
 
-        for res in glow.get_resources(ve):
+        for res in glow.get_resources(this_ve):
 
-            if period == "PT1M":
-                if res.classifier not in ['electricity.consumption']:
-                    # only electricity.consumption is valid for PT1M
-                    continue
+            if not glow.check_valid_period(res, conf.period):
+                continue
 
-            # Glow query will fail if  dt_from = dt_to. This should not happen with a
-            # wait period >= 1 Min, and rounding down dt_from and dt_to to the minute
+            readings = glow.get_readings(res, dt_from, dt_to, conf.period)
 
-            if dt_from == dt_to:
-                logging.error("process data: dt_from == dt_to [%s [%s]", dt_from, dt_to)
-                raise RuntimeError("Error in process_data: dt_from == dt_to")
+            if not conf.incomplete_periods:
+                # The glow response will always include a partial reading for the last datapoint:
+                #   - if dt_to is not on "period" boundary (this is expected)
+                #   - if dt_to is on a 'period' boundary (partial reading starts at dt_to)
+                #  Thus, to avoid partial readings, we should drop the last reading in all cases
 
-            readings = glow.get_readings(res, dt_from, dt_to, period)
-
-            if no_incomplete_periods:
                 readings.pop()
 
-            publish_readings(res, readings, period, pub, mqtt_topic, metrics_fp)
+            publish_readings(res, readings, conf.period, pub, conf.mqtt_topic, metrics_fp)
 
 
-def do_process_loop(glow_conn, mqtt_conn, checkpoint, metrics_fp, conf):
+def do_process_loop(glow: GlowClient, mqtt_conn: mqtt.Client, checkpoint: Checkpoint,
+                    metrics_fp: io.TextIOWrapper, conf: GlowConfig) -> NoReturn:
     """
+    Generate start / end time for the next dataset, process, and repeat is a continuous loop.
 
-    :param glow_conn:
-    :type glow_conn:
-    :param mqtt_conn:
-    :type mqtt_conn:
-    :param checkpoint:
-    :type checkpoint:
-    :param metrics_fp:
-    :type metrics_fp:
-    :param conf:
-    :type conf:
-    :return:
-    :rtype:
+    Once the end time is in the future (i.e. now up to-date), the function sleep for a wait time
+    (defined in the config file) before looping again
+
+    :param glow: Glow connection object - includes e.g. Glow virtual entities
+    :param mqtt_conn: mqtt publish connection
+    :param checkpoint: checkpoint maintains the timestamp for the last Glow data published
+    :param metrics_fp: output file for glow data points
+    :param conf: glow configuration data (comprising e.g. period..)
     """
-    # Glow does not like fractional seconds = we'll just round down to complete minutes
-
     # get dt_from from checkpoint. This should be rounded to a period boundary
-    dt_from = checkpoint.dt
+    dt_from = checkpoint.last_dt
 
     # Glow does not like fractional seconds = we'll just round down to complete minutes
     now = round_down(datetime.now().astimezone(pytz.UTC), 'PT1M')
@@ -192,11 +191,14 @@ def do_process_loop(glow_conn, mqtt_conn, checkpoint, metrics_fp, conf):
 
     # logging.info("do_process_loop(start): now: %s, from: %s, to: %s", now, dt_from, dt_to)
 
-    ve_list = glow_conn.get_virtual_entities()
+    ve_list = glow.get_virtual_entities()
 
     while True:
-        process_data(glow_conn, ve_list, conf.period, dt_from, dt_to, mqtt_conn, conf.mqtt_topic,
-                     conf.incomplete_periods, metrics_fp)
+
+        if not glow.token_check_valid():
+            glow.authenticate()
+
+        process_data(glow, ve_list, conf, dt_from, dt_to, mqtt_conn, metrics_fp)
         # process_data(glow_conn, mqtt_con, metrics_fp, conf, ve_list, dt_from, dt_to)
         # note: occasionally zeroes are returned if glow has not updated.
         # Need to see how we detect / fix
@@ -216,76 +218,144 @@ def do_process_loop(glow_conn, mqtt_conn, checkpoint, metrics_fp, conf):
         # logging.info("do_process_loop(loop): now: %s, from: %s, to: %s", now, dt_from, dt_to)
 
 
+def on_connect(client, userdata, flags, response_code):
+    """Update global var MQTT_CLIENT_CONNECTED on successful connection."""
+    global MQTT_CLIENT_CONNECTED
+
+    _resp_text = {0: 'Connection successful',
+                  1: 'Connection refused - incorrect protocol version',
+                  2: 'Connection refused - invalid client',
+                  3: 'Connection refused - server unavailable',
+                  4: 'Coonection refused - bad username or password',
+                  5: 'Connection refused - not authorised'}
+
+    logging.info('MQTT %s', _resp_text[response_code])
+    if response_code == 0:
+        MQTT_CLIENT_CONNECTED = True
+
+
+def on_disconnect(client, userdata, response_code):
+    """Update global var MQTT_CLIENT_CONNECTED on disconnection."""
+    global MQTT_CLIENT_CONNECTED
+
+    MQTT_CLIENT_CONNECTED = False
+
+    if response_code == 0:
+        logging.info('MQTT disconnected')
+    else:
+        logging.info('MQTT disconnected unexpectedly')
+
+
+def connect_to_mqtt(host, username, password):
+    """Connect to MQTT and start MQTT loop."""
+    global MQTT_CLIENT_CONNECTED
+
+    MQTT_CLIENT_CONNECTED = False
+    mqtt_client = mqtt.Client()
+    mqtt_client.on_connect = on_connect
+    mqtt_client.on_disconnect = on_disconnect
+    mqtt_client.username_pw_set(username, password)
+    mqtt_client.connect(host)
+    mqtt_client.loop_start()
+
+    # make sure we are connected...
+    retries = 3
+    while True:
+        # MQTT_CLIENT_CONNECTED is set via the on_connect callback
+        if MQTT_CLIENT_CONNECTED:
+            logging.info('MQTT Connection acknowledged')
+            break
+
+        if retries > 0:
+            logging.info('Waiting for MQTT connection acknowledgement')
+            retries = retries - 1
+            sleep(1)
+        else:
+            raise MqttError('MQTT connection failure')
+
+    return mqtt_client
+
+
 def main():
-    """
-    :return:
-    :rtype:
-    """
+    """Get configuration and initialise, then call main process loop."""
     # GET CONFIGURATION & VALIDATE, CONFIGURE LOGGING
+
+    #
+    # get configuration, set up logging and validate config
+    #
     try:
-        #
-        # get configuration, set up logging and validate config
-        #
         conf = GlowConfig()
 
-        setup_logging(conf.logfile, conf.loglevel)
-        conf.write_to_log()
+    except ConfigError as err:
+        print(repr(err))
+        sys.exit(1)
 
-        # create checkpoint object and set start time as:
-        #   1. time in checkpoint file, or
-        #   2. current time (rounded down to start of current period) where period is an ISO_PERIOD
-        # glow requires  weekly / monthly data requests to be aligned on weekly / monthly boundaries
-        # - so we'll do the same for all time periods.
+    setup_logging(conf.logfile, conf.loglevel)
+    conf.write_to_log()
 
-        default_start_time = round_down(datetime.now().astimezone(pytz.UTC), conf.period)
+    # create checkpoint object and set start time as:
+    #   1. time in checkpoint file, or
+    #   2. current time (rounded down to start of current period) where period is an ISO_PERIOD
+    # glow requires  weekly / monthly data requests to be aligned on weekly / monthly boundaries
+    # - so we'll do the same for all time periods.
 
-        logging.info('Default start time is: %s', default_start_time.isoformat())
+    default_start_time = round_down(datetime.now().astimezone(pytz.UTC), conf.period)
 
+    try:
         checkpoint = Checkpoint(conf.checkpoint_file, conf.period, default_start_time)
 
-        logging.info('Checkpoint file is: %s', checkpoint.path)
-        logging.info('Checkpoint time is: %s with period %s',
-                     checkpoint.dt.isoformat(), checkpoint.period)
+    except CheckpointError as err:
+        logging.fatal(repr(err))
+        sys.exit(2)
 
-        logging.info('Actual start time is: %s', checkpoint.dt.isoformat())
+    logging.info('Default start time is: %s', default_start_time.isoformat())
+    logging.info('Actual start time is: %s', checkpoint.last_dt.isoformat())
+    logging.info('Checkpoint file is: %s', checkpoint.path)
+    logging.info('Checkpoint time is: %s with period %s',
+                 checkpoint.last_dt.isoformat(), checkpoint.period)
 
+    try:
         # Set up connection to Glow
         glow = GlowClient(conf.glow_user, conf.glow_pwd)
         logging.info("Connected to Glow API..")
 
-        # Set up connection to MQTT (if enabled) and start MQTT loop
+    except GlowAPIError as err:
+        logging.fatal(repr(err))
+        sys.exit(3)
+
+    # Set up connection to MQTT (if enabled) and start MQTT loop
+
+    try:
         if conf.mqtt_enabled:
-            mqtt_client = mqtt.Client()
-            mqtt_client.username_pw_set(conf.mqtt_user, conf.mqtt_pwd)
-            mqtt_client.connect(conf.mqtt_host)
-            mqtt_client.loop_start()
+            mqtt_client = connect_to_mqtt(conf.mqtt_host, conf.mqtt_user, conf.mqtt_pwd)
             logging.info('Publishing to MQTT server %s on topic "%s/+" ',
                          conf.mqtt_host, conf.mqtt_topic)
         else:
             mqtt_client = None
             logging.info('Publishing to MQTT disabled')
 
-        # set up metrics file
+    except MqttError as err:
+        logging.fatal(repr(err))
+        sys.exit(4)
 
-        try:
-            metrics_fp = open(conf.output_file, 'a')
-            logging.info('Publishing to file "%s"', conf.output_file)
+    # Set up metrics file
+    try:
+        metrics_fp = open(conf.output_file, 'a', encoding="utf-8")
+        logging.info('Publishing to file "%s"', conf.output_file)
 
-        except Exception as err:
-            logging.critical(err)
-            print(err)
-            sys.exit()
+    except OSError as err:
+        logging.fatal('Error opening metrics file %s', conf.output_file)
+        sys.exit(5)
 
+    try:
         # call the main process loop to request / process glow data
         do_process_loop(glow, mqtt_client, checkpoint, metrics_fp, conf)
 
-    except SystemExit:
-        logging.critical('system exit')
-    except Exception as err:
-        print(err)
-        logging.critical(err)
-        print(err)
-        sys.exit()
+    except (GlowAPIError, MqttError, InvalidPeriod) as err:
+        metrics_fp.close()
+        checkpoint.close()
+        logging.fatal(repr(err))
+        sys.exit(6)
 
 
 if __name__ == '__main__':

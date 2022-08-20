@@ -3,7 +3,7 @@ LABEL maintainer="pete"
 WORKDIR /usr/glowmarkt/src
 
 ADD getglowdata.py .
-ADD GlowClient.py .
+ADD glow.py .
 ADD glow.checkpoint .
 ADD glow.env .
 RUN pip install python-dotenv python-dateutil paho-mqtt pytz requests

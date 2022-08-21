@@ -94,6 +94,7 @@ def publish_readings(resource, readings, period, mqtt_client, mqtt_topic, metric
                 try:
                     message = mqtt_client.publish(topic, payload)
                     message.wait_for_publish()
+                    print(f'published message on {topic}')
 
                 except ValueError as err:
                     # failed to queue message
@@ -110,10 +111,10 @@ def publish_readings(resource, readings, period, mqtt_client, mqtt_topic, metric
         msg = (
             f'{period}, {resource.res_type()}, {resource.supply_type()},'
             f'{reading[0]}, {datetime.fromtimestamp(reading[0], pytz.UTC).isoformat()}, '
-            f'{str(reading[1])}, {units}'
+            f'{str(reading[1])}, {units}, {topic}'
         )
 
-        logging.debug('published: %s', msg)
+        logging.info('published: %s', msg)
         metrics_fp.write(msg + '\n')
 
     metrics_fp.flush()

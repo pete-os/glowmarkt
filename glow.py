@@ -385,8 +385,11 @@ class Resource:
         """
         Initialise resource object from the response to a glow 'get resources' API call.
 
-        Note that the structure of the resource classifier is <supply_type>.<resource_type>
-        e.g. "electricity.cost"
+        Note that the structure of the resource classifier is <supply_type>.<resource_type>:
+            'electricity.consumption"
+            'electricity.consumption.cost'
+            'gas.consumption'
+            'gas.consumption.cost'
         """
         self.res_id = payload["resourceId"]
         self.type_id = payload["resourceTypeId"]
@@ -399,11 +402,13 @@ class Resource:
 
     def supply_type(self):
         """Return the supply type from resource classifier."""
+        print(f'supply_type: {self.classifier.partition(".")[0]}')
         return self.classifier.partition('.')[0]
 
     def res_type(self):
         """Return the resource type from resource classifier."""
-        return self.classifier.partition('.')[2]
+        print(f'res_type:  {self.classifier} --> {self.classifier.rpartition(".")[2]}')
+        return self.classifier.rpartition('.')[2]
 
     def __repr__(self):
         """Print a representation of a Resource object."""

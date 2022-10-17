@@ -73,6 +73,7 @@ def publish_readings(resource, readings, period, mqtt_client, mqtt_topic, metric
         multiplier = 1
         units = resource.base_unit
 
+    # TODO: fix mqtt_topic etc when mqtt is not enabled...
     topic = mqtt_topic + '/' + resource.res_type()
 
     for reading in readings:
@@ -83,18 +84,16 @@ def publish_readings(resource, readings, period, mqtt_client, mqtt_topic, metric
             if mqtt_client is not None:
                 payload = json.dumps({'metric_fname': resource.res_type(),
                                       'supply_type': resource.supply_type(),
-                                      'metric_type': 'consumption',
                                       'period': period,
                                       'timestamp': reading[0],
                                       'timestamp_str':
                                           datetime.fromtimestamp(reading[0], pytz.UTC).isoformat(),
+                                      # resource.res_type(): reading[1],
                                       'metric_value': reading[1],
                                       'units': units})
-
                 try:
                     message = mqtt_client.publish(topic, payload)
                     message.wait_for_publish()
-                    print(f'published message on {topic}')
 
                 except ValueError as err:
                     # failed to queue message
@@ -121,7 +120,7 @@ def publish_readings(resource, readings, period, mqtt_client, mqtt_topic, metric
 
 
 def process_data(glow: GlowClient, virtual_entities: list, conf: GlowConfig, dt_from: datetime,
-                 dt_to: datetime, pub: mqtt.Client, metrics_fp: IO) -> None:
+                 dt_to: datetime, mqtt_client: mqtt.Client, metrics_fp: IO) -> None:
     """
     Retrieve the glow resources (and readings for each resource) in the list of virtual entities.
 
@@ -130,7 +129,7 @@ def process_data(glow: GlowClient, virtual_entities: list, conf: GlowConfig, dt_
     :param conf: the glow configuration
     :param dt_from: start of time period for which data is being retrieved
     :param dt_to: end of time period for which data is being retrieved
-    :param pub: mqtt publish connection
+    :param mqtt_client: mqtt publish connection
     :param metrics_fp: metrics output file
     """
     # pylint: disable=too-many-arguments
@@ -161,7 +160,7 @@ def process_data(glow: GlowClient, virtual_entities: list, conf: GlowConfig, dt_
 
                 readings.pop()
 
-            publish_readings(res, readings, conf.period, pub, conf.mqtt_topic, metrics_fp)
+            publish_readings(res, readings, conf.period, mqtt_client, conf.mqtt_topic, metrics_fp)
 
 
 def do_process_loop(glow: GlowClient, mqtt_conn: mqtt.Client, checkpoint: Checkpoint,
@@ -345,6 +344,7 @@ def main():
         logging.info('Publishing to file "%s"', conf.output_file)
 
     except OSError as err:
+        logging.fatal(repr(err))
         logging.fatal('Error opening metrics file %s', conf.output_file)
         sys.exit(5)
 

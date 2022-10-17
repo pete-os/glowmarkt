@@ -190,6 +190,10 @@ class GlowConfig:
                 self.mqtt_user = _conf['GLOW_MQTT_USERNAME']
                 self.mqtt_pwd = _conf['GLOW_MQTT_PASSWORD']
                 self.mqtt_topic = _conf['GLOW_MQTT_TOPIC']
+            else:
+                # TODO:
+                self.mqtt_topic = ""
+
 
         except KeyError as this_exception:
             raise ConfigError(f'Conf file err: {this_exception.args[0]} is not defined'
@@ -205,8 +209,10 @@ class GlowConfig:
             self.logfile = os.path.join(
                 self.logdir, _conf.get('GLOW_LOGFILE', DEF_LOGFILE))
 
-            self.checkpoint_file = os.path.join(
-                self.logdir, _conf.get('GLOW_CHECKPOINT_FILE', DEF_CHECKPOINT_FILE))
+            #self.checkpoint_file = os.path.join(
+            #    self.logdir, _conf.get('GLOW_CHECKPOINT_FILE', DEF_CHECKPOINT_FILE))
+
+            self.checkpoint_file = _conf.get('GLOW_CHECKPOINT_FILE', DEF_CHECKPOINT_FILE)
 
             if self.period not in ISO_PERIODS:
                 raise ConfigError(f'Conf file err: Invalid period'
@@ -402,12 +408,10 @@ class Resource:
 
     def supply_type(self):
         """Return the supply type from resource classifier."""
-        print(f'supply_type: {self.classifier.partition(".")[0]}')
         return self.classifier.partition('.')[0]
 
     def res_type(self):
         """Return the resource type from resource classifier."""
-        print(f'res_type:  {self.classifier} --> {self.classifier.rpartition(".")[2]}')
         return self.classifier.rpartition('.')[2]
 
     def __repr__(self):

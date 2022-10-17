@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="WebServers">
+    <option name="servers">
+      <webServer id="d8931e03-48e9-4863-af19-c398a07521e4" name="phobos">
+        <fileTransfer rootFolder="/opt/build/" accessType="SFTP" host="phobos.cluster-one.co.uk" port="15022" sshConfigId="5bfb0f11-09dd-4dab-a229-e22ee1e14ebb" sshConfig="localadmin@phobos.cluster-one.co.uk:15022 key" keyPair="true">
+          <advancedOptions>
+            <advancedOptions dataProtectionLevel="Private" passiveMode="true" shareSSLContext="true" />
+          </advancedOptions>
+        </fileTransfer>
+      </webServer>
+    </option>
+  </component>
+</project>

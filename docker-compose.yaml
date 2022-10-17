@@ -1,0 +1,17 @@
+version: "3.5"
+
+services:
+
+  glowmarkt_daily:
+    image: pete/glowmarkt:1.1
+    container_name: glowmarkt_1
+    volumes:
+      - /opt/build/glowmarkt/GLOW/glow.env:/app/glow.env
+      - /opt/build/glowmarkt/GLOW/glow.checkpoint:/app/glow.checkpoint
+      - /opt/build/glowmarkt/GLOW/log:/app/log
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "10"
+    #restart: always
